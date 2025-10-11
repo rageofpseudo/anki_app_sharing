@@ -83,82 +83,6 @@ class _MainAppState extends State<_MainApp> {
   }
 
 
-// version 1 
-  Future<void> _sendToAnki(String front, String back, String translation) async {
-    final url = Uri.parse('http://${ipController.text}:8765');
-    final body = {
-      "action": "addNote",
-      "version": 6,
-      "params": {
-        "note": {
-          "deckName": deckController.text,
-          "modelName": "Basic",
-          "fields": {
-            "Front": front,
-            "Back": "$back  $translation",
-          },
-          "options": {
-            "allowDuplicate": false
-          },
-          "tags": ["fromFlutter"]
-        }
-      }
-    };
-
-    final body2 = {
-      "action": "addNote",
-      "version": 6,
-      "params": {
-        "note": {
-          "deckName": deckController.text,
-          "modelName": "Basic",
-          "fields": {
-            "Front": translation,
-            "Back": "$front  $back",
-          },
-          "options": {
-            "allowDuplicate": false
-          },
-          "tags": ["fromFlutter"]
-        }
-      }
-    };
-
-    try {
-      final response = await http.post(
-        url,
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode(body),
-      );
-
-      if (response.statusCode == 200) {
-        final res = jsonDecode(response.body);
-        _showMessage("✅ Added: $front → $back (id ${res['result']})");
-      } else {
-        _showMessage("Error: ${response.statusCode}");
-      }
-    } catch (e) {
-      _showMessage("Failed to connect: $e");
-    }
-
-    try {
-      final response = await http.post(
-        url,
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode(body2),
-      );
-
-      if (response.statusCode == 200) {
-        final res = jsonDecode(response.body);
-        _showMessage("✅ Added: $translation → $front (id ${res['result']})");
-      } else {
-        _showMessage("Error: ${response.statusCode}");
-      }
-    } catch (e) {
-      _showMessage("Failed to connect: $e");
-    }
-  }
-
   void _showMessage(String msg) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
@@ -169,6 +93,84 @@ class _MainAppState extends State<_MainApp> {
   // version 2 of sending notes to Anki with offline support
   Future<void> addNote(String front, String back, String translation) async {
     final url = Uri.parse('http://${ipController.text}:8765');
+
+    // Create two notes, each with a unique timestamp to avoid duplicate detection
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+
+    final note1 = {
+      "deckName": deckController.text,
+      "modelName": "Basic",
+      "fields": {
+        "Front": front,
+        "Back": "$back<br><br>$translation",
+      },
+      "options": {"allowDuplicate": false},
+      "tags": ["fromFlutter"]
+    };
+
+    final note2 = {
+      "deckName": deckController.text,
+      "modelName": "Basic",
+      "fields": {
+        "Front": translation,
+        "Back": "$front<br><br>$back",
+      },
+      "options": {"allowDuplicate": false},
+      "tags": ["fromFlutter"]
+  };
+
+    Future<void> sendOrSave(Map<String, dynamic> note) async {
+      try {
+        final response = await http.post(
+          url,
+          headers: {"Content-Type": "application/json"},
+          body: jsonEncode({"action": "addNote", "version": 6, "params": {"note": note}}),
+        );
+
+        if (response.statusCode != 200) {
+          throw Exception("HTTP ${response.statusCode}");
+        }
+
+        final data = jsonDecode(response.body);
+        if (data["error"] != null) throw Exception(data["error"]);
+
+        _showMessage("✅ Added: ${note['fields']['Front']}");
+      } catch (e) {
+        // Save note locally if failed
+        await pendingBox.add(note);
+        _showMessage("⚠️ Could not connect. Note saved for later.");
+        print("⚠️ Could not connect. Note saved for later.");
+         print("⚠️ Could not connect. Note saved for later.");
+          print("⚠️ Could not connect. Note saved for later.");
+           print("⚠️ Could not connect. Note saved for later.");
+            print("⚠️ Could not connect. Note saved for later.");
+             print("⚠️ Could not connect. Note saved for later.");
+              print("⚠️ Could not connect. Note saved for later.");
+
+      }
+    }
+
+    await sendOrSave(note1);
+    await sendOrSave(note2);
+
+  }
+
+Future<void> syncPendingNotes() async {
+  final notes = pendingBox.values.toList(); // copy values to avoid issues while deleting
+  if (notes.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("✅ No pending notes")),
+    );
+    return;
+  }
+
+  print("=== [SYNC STARTED] Found ${notes.length} pending notes ===");
+
+  for (final noteObj in notes) {
+    final note = noteObj as Map<String, dynamic>; // cast Hive value
+    final front = note["front"];
+    final back = note["back"];
+
     final body = {
       "action": "addNote",
       "version": 6,
@@ -178,99 +180,7 @@ class _MainAppState extends State<_MainApp> {
           "modelName": "Basic",
           "fields": {
             "Front": front,
-            "Back": "$back  $translation",
-          },
-          "options": {
-            "allowDuplicate": false
-          },
-          "tags": ["fromFlutter"]
-        }
-      }
-    };
-
-    final body2 = {
-      "action": "addNote",
-      "version": 6,
-      "params": {
-        "note": {
-          "deckName": deckController.text,
-          "modelName": "Basic",
-          "fields": {
-            "Front": translation,
-            "Back": "$front  $back",
-          },
-          "options": {
-            "allowDuplicate": false
-          },
-          "tags": ["fromFlutter"]
-        }
-      }
-    };
-
-    try {
-      final response = await http.post(
-        url,
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode(body),
-      );
-
-      if (response.statusCode == 200) {
-        final res = jsonDecode(response.body);
-        _showMessage("✅ Added: $front → $back (id ${res['result']})");
-      } else {
-        _showMessage("Error: ${response.statusCode}");
-        throw Exception("Failed to add note");
-      }
-    } catch (e) {
-      // On failure, save note locally
-      final pendingNote = PendingNote(front, "$back  $translation");
-      await pendingBox.add(pendingNote.toJson());
-      _showMessage("⚠️ Could not connect. Note saved for later.");
-    }
-
-    try {
-      final response = await http.post(
-        url,
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode(body2),
-      );
-
-      if (response.statusCode == 200) {
-        final res = jsonDecode(response.body);
-        _showMessage("✅ Added: $translation → $front (id ${res['result']})");
-      } else {
-        _showMessage("Error: ${response.statusCode}");
-        throw Exception("Failed to add note");
-      }
-    } catch (e) {
-      // On failure, save note locally
-      final pendingNote = PendingNote(translation, "$front  $back");
-      await pendingBox.add(pendingNote.toJson());
-      _showMessage("⚠️ Could not connect. Note saved for later.");
-    }
-  
-      
-   
-    setState(() {}); // ✅ Forces refresh count
-    
-  }
-
-Future<void> syncPendingNotes() async {
-  final notes = pendingBox.values.toList();
-
-  for (int i = 0; i < notes.length; i++) {
-    final note = notes[i] as Map<String, dynamic>; // ✅ cast
-
-    final body = {
-      "action": "addNote",
-      "version": 6,
-      "params": {
-        "note": {
-          "deckName": deckController.text,
-          "modelName": "Basic",
-          "fields": {
-            "Front": note["front"],
-            "Back": note["back"],
+            "Back": back,
           },
           "options": {"allowDuplicate": false},
         }
@@ -287,16 +197,30 @@ Future<void> syncPendingNotes() async {
       final data = jsonDecode(response.body);
       if (data["error"] != null) throw Exception(data["error"]);
 
-      // Success → remove from pending
-      await pendingBox.deleteAt(i);
+      // Success → remove note from Hive
+      final key = pendingBox.keys.firstWhere(
+        (k) => pendingBox.get(k) == noteObj,
+        orElse: () => null,
+      );
+      if (key != null) await pendingBox.delete(key);
+
+      print("✅ Synced note: $front → $back");
     } catch (e) {
-      print("Failed to sync note ${note["front"]}: $e");
-      break; // stop on first failure
+      print("❌ Failed to sync note: $front → $back : $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("❌ Could not sync note: $front")),
+      );
+      return; // stop on first failure
     }
   }
 
+  ScaffoldMessenger.of(context).showSnackBar(
+    const SnackBar(content: Text("✅ All pending notes synced")),
+  );
   setState(() {}); // refresh UI
+  print("=== [SYNC COMPLETE] All pending notes synced ===");
 }
+
 
 
   @override
