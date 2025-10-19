@@ -2,8 +2,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
-import 'pending_note.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'dart:io';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -35,7 +35,6 @@ class AnkiShareApp extends StatelessWidget {
   }
 }
 
-
 class _MainApp extends StatefulWidget {
   const _MainApp({super.key});
 
@@ -44,12 +43,11 @@ class _MainApp extends StatefulWidget {
 }
 
 class _MainAppState extends State<_MainApp> {
-  final ipController = TextEditingController(text: "10.192.51.198"); 
+  final ipController = TextEditingController(text: "10.192.51.198");
   final deckController = TextEditingController(text: "Default");
-  final debugController = TextEditingController(text: "debug");
-  final frontController = TextEditingController(); 
-  final backController = TextEditingController(); 
-  final translationController = TextEditingController(); 
+  final frontController = TextEditingController();
+  final backController = TextEditingController();
+  final translationController = TextEditingController();
   late Box pendingBox;
 
   @override
@@ -59,13 +57,13 @@ class _MainAppState extends State<_MainApp> {
 
     // auto sync on app start
     syncPendingNotes();
+    
     // Listen for shared media (text or files)
     ReceiveSharingIntent.instance.getMediaStream().listen((List<SharedMediaFile> value) {
       if (value.isNotEmpty && value.first.type == SharedMediaType.text) {
         setState(() {
-          frontController.text = value.first.path; 
+          frontController.text = value.first.path;
         });
-        //_sendToAnki(value.first.path);
       }
     }, onError: (err) {
       print("getMediaStream error: $err");
@@ -77,11 +75,41 @@ class _MainAppState extends State<_MainApp> {
         setState(() {
           frontController.text = value.first.path;
         });
-        //_sendToAnki(value.first.path);
       }
     });
   }
 
+  Future<void> autoDetectAnkiConnect() async {
+    const port = 8765;
+    final subnet = "192.168.1"; // adjust if needed (could make dynamic)
+    bool found = false;
+
+    for (int i = 1; i < 255 && !found; i++) {
+      final ip = "$subnet.$i";
+      try {
+        final url = Uri.parse("http://$ip:$port");
+        final response = await http
+            .post(url,
+                headers: {"Content-Type": "application/json"},
+                body: jsonEncode({"action": "version", "version": 6}))
+            .timeout(const Duration(milliseconds: 400));
+
+        if (response.statusCode == 200) {
+          setState(() => ipController.text = ip);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("✅ Found AnkiConnect at $ip")),
+          );
+          found = true;
+        }
+      } catch (_) {}
+    }
+
+    if (!found) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("❌ Could not find AnkiConnect")),
+      );
+    }
+  }
 
   void _showMessage(String msg) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -89,13 +117,8 @@ class _MainAppState extends State<_MainApp> {
     });
   }
 
-
-  // version 2 of sending notes to Anki with offline support
   Future<void> addNote(String front, String back, String translation) async {
     final url = Uri.parse('http://${ipController.text}:8765');
-
-    // Create two notes, each with a unique timestamp to avoid duplicate detection
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
 
     final note1 = {
       "deckName": deckController.text,
@@ -117,7 +140,7 @@ class _MainAppState extends State<_MainApp> {
       },
       "options": {"allowDuplicate": false},
       "tags": ["fromFlutter"]
-  };
+    };
 
     Future<void> sendOrSave(Map<String, dynamic> note) async {
       try {
@@ -139,89 +162,70 @@ class _MainAppState extends State<_MainApp> {
         // Save note locally if failed
         await pendingBox.add(note);
         _showMessage("⚠️ Could not connect. Note saved for later.");
-        print("⚠️ Could not connect. Note saved for later.");
-         print("⚠️ Could not connect. Note saved for later.");
-          print("⚠️ Could not connect. Note saved for later.");
-           print("⚠️ Could not connect. Note saved for later.");
-            print("⚠️ Could not connect. Note saved for later.");
-             print("⚠️ Could not connect. Note saved for later.");
-              print("⚠️ Could not connect. Note saved for later.");
-
+        print("⚠️ Could not connect. Note saved for later: $e");
       }
     }
 
     await sendOrSave(note1);
     await sendOrSave(note2);
-
   }
 
-Future<void> syncPendingNotes() async {
-  final notes = pendingBox.values.toList(); // copy values to avoid issues while deleting
-  if (notes.isEmpty) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("✅ No pending notes")),
-    );
-    return;
-  }
-
-  print("=== [SYNC STARTED] Found ${notes.length} pending notes ===");
-
-  for (final noteObj in notes) {
-    final note = noteObj as Map<String, dynamic>; // cast Hive value
-    final front = note["front"];
-    final back = note["back"];
-
-    final body = {
-      "action": "addNote",
-      "version": 6,
-      "params": {
-        "note": {
-          "deckName": deckController.text,
-          "modelName": "Basic",
-          "fields": {
-            "Front": front,
-            "Back": back,
-          },
-          "options": {"allowDuplicate": false},
-        }
-      }
-    };
-
-    try {
-      final response = await http.post(
-        Uri.parse('http://${ipController.text}:8765'),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode(body),
-      );
-
-      final data = jsonDecode(response.body);
-      if (data["error"] != null) throw Exception(data["error"]);
-
-      // Success → remove note from Hive
-      final key = pendingBox.keys.firstWhere(
-        (k) => pendingBox.get(k) == noteObj,
-        orElse: () => null,
-      );
-      if (key != null) await pendingBox.delete(key);
-
-      print("✅ Synced note: $front → $back");
-    } catch (e) {
-      print("❌ Failed to sync note: $front → $back : $e");
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("❌ Could not sync note: $front")),
-      );
-      return; // stop on first failure
+  Future<void> syncPendingNotes() async {
+    final notes = pendingBox.values.toList();
+    if (notes.isEmpty) {
+      print("✅ No pending notes to sync");
+      return;
     }
+
+    print("=== [SYNC STARTED] Found ${notes.length} pending notes ===");
+
+    final List<int> keysToDelete = [];
+    int syncedCount = 0;
+    int failedCount = 0;
+
+    for (int i = 0; i < notes.length; i++) {
+      final noteObj = notes[i];
+      final note = noteObj as Map<String, dynamic>;
+      final front = note["fields"]?["Front"] ?? "Unknown";
+      final back = note["fields"]?["Back"] ?? "";
+
+      final body = {
+        "action": "addNote",
+        "version": 6,
+        "params": {
+          "note": note
+        }
+      };
+
+      try {
+        final response = await http.post(
+          Uri.parse('http://${ipController.text}:8765'),
+          headers: {"Content-Type": "application/json"},
+          body: jsonEncode(body),
+        ).timeout(const Duration(seconds: 5));
+
+        final data = jsonDecode(response.body);
+        if (data["error"] != null) throw Exception(data["error"]);
+
+        keysToDelete.add(i);
+        syncedCount++;
+        print("✅ Synced note: $front");
+      } catch (e) {
+        failedCount++;
+        print("❌ Failed to sync note: $front : $e");
+      }
+    }
+
+    // Delete synced notes
+    for (int i = keysToDelete.length - 1; i >= 0; i--) {
+      final key = pendingBox.keyAt(keysToDelete[i]);
+      await pendingBox.delete(key);
+    }
+
+    _showMessage("✅ Synced $syncedCount notes (${failedCount} failed)");
+    setState(() {});
+    print("=== [SYNC COMPLETE] Synced: $syncedCount, Failed: $failedCount ===");
   }
-
-  ScaffoldMessenger.of(context).showSnackBar(
-    const SnackBar(content: Text("✅ All pending notes synced")),
-  );
-  setState(() {}); // refresh UI
-  print("=== [SYNC COMPLETE] All pending notes synced ===");
-}
-
-
 
   @override
   Widget build(BuildContext context) {
@@ -232,10 +236,15 @@ Future<void> syncPendingNotes() async {
           title: const Text("Anki Share"),
           actions: [
             IconButton(
+                icon: const Icon(Icons.search),
+                tooltip: "Auto-detect Anki IP",
+                onPressed: autoDetectAnkiConnect,
+            ),
+            IconButton(
               icon: const Icon(Icons.sync),
               onPressed: () async {
                 await syncPendingNotes();
-                setState(() {}); // can rebuild after
+                setState(() {});
               },
               tooltip: "Sync Pending Notes",
             ),
@@ -246,7 +255,7 @@ Future<void> syncPendingNotes() async {
                 setState(() {});
                 _showMessage("🗑️ Cleared all pending notes.");
               },
-              tooltip: "Sync Pending Notes",
+              tooltip: "Clear Pending Notes",
             ),
           ],
         ),
@@ -255,15 +264,14 @@ Future<void> syncPendingNotes() async {
           child: Column(
             children: [
               TextField(
-                controller: ipController,
-                decoration: const InputDecoration(labelText: "AnkiConnect IP"),
+                  controller: ipController,
+                  decoration: const InputDecoration(labelText: "AnkiConnect IP"),
               ),
               TextField(
                 controller: deckController,
                 decoration: const InputDecoration(labelText: "Deck Name"),
               ),
               const SizedBox(height: 20),
-
               TextField(
                 controller: frontController,
                 decoration: const InputDecoration(labelText: "Hanzi"),
@@ -287,15 +295,15 @@ Future<void> syncPendingNotes() async {
               ElevatedButton(
                 onPressed: () async {
                   if (frontController.text.isNotEmpty) {
-                     await addNote(frontController.text, backController.text, translationController.text);
-                     setState(() {});          // can rebuild after
+                    await addNote(frontController.text, backController.text, translationController.text);
+                    setState(() {});
                   }
                 },
                 child: const Text("Send to Anki"),
               ),
               const SizedBox(height: 20),
               Expanded(
-                child:  ValueListenableBuilder(
+                child: ValueListenableBuilder(
                   valueListenable: pendingBox.listenable(),
                   builder: (context, box, _) {
                     return Text(
@@ -310,5 +318,15 @@ Future<void> syncPendingNotes() async {
         ),
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    ipController.dispose();
+    deckController.dispose();
+    frontController.dispose();
+    backController.dispose();
+    translationController.dispose();
+    super.dispose();
   }
 }
